@@ -12,7 +12,7 @@ use serde_json::Value;
 use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 
-use crate::config::{Config, ModelSettings};
+use crate::config::{Config, ModelSettings, ProviderSettings};
 use crate::error::AppError;
 use crate::provider::{get_provider_with_executor, CliExecutor, Executor};
 use crate::rate_limiter::RateLimiter;
@@ -34,7 +34,7 @@ struct AppState {
     executor: Arc<dyn Executor>,
     rate_limiter: RateLimiter,
     model_settings: HashMap<(String, String), ModelSettings>,
-    supports_auto_model: HashMap<String, bool>,
+    provider_settings: HashMap<String, ProviderSettings>,
 }
 
 async fn health() -> HttpResponse {
@@ -70,17 +70,30 @@ async fn generate(
             (timeout, Some(guard))
         }
         None => {
-            let supports_auto = state
-                .supports_auto_model
-                .get(&req.provider)
-                .copied()
-                .unwrap_or(true);
+            let provider_cfg = state.provider_settings.get(&req.provider);
+
+            let supports_auto = provider_cfg.map(|p| p.supports_auto_model).unwrap_or(true);
 
             if !supports_auto {
                 return Err(AppError::AutoModelNotSupported(req.provider.clone()));
             }
 
-            (None, None)
+            // Use provider-level rate limit for auto model
+            let guard = if provider_cfg.is_some() {
+                state
+                    .rate_limiter
+                    .try_acquire(&req.provider, "_auto")
+                    .map_err(|()| AppError::RateLimited {
+                        provider: req.provider.clone(),
+                        model: None,
+                    })
+                    .ok()
+            } else {
+                None
+            };
+
+            let timeout = provider_cfg.and_then(|p| p.timeout_secs);
+            (timeout, guard)
         }
     };
 
@@ -123,7 +136,7 @@ async fn main() -> std::io::Result<()> {
     };
 
     let model_settings = config.model_settings();
-    let supports_auto_model = config.provider_supports_auto_model();
+    let provider_settings = config.provider_settings();
 
     let rate_limiter = RateLimiter::new();
     for (key, settings) in &model_settings {
@@ -131,11 +144,25 @@ async fn main() -> std::io::Result<()> {
         rate_limiter.register(key.0.clone(), key.1.clone(), settings.clone());
     }
 
+    // Register provider-level rate limits for auto model
+    for (name, settings) in &provider_settings {
+        if settings.supports_auto_model {
+            let auto_settings = ModelSettings {
+                rps: settings.rps,
+                rpm: settings.rpm,
+                concurrent: settings.concurrent,
+                timeout_secs: settings.timeout_secs,
+            };
+            info!(provider = %name, "registering auto model settings");
+            rate_limiter.register(name.clone(), "_auto".into(), auto_settings);
+        }
+    }
+
     let state = Arc::new(AppState {
         executor: CliExecutor::new(),
         rate_limiter,
         model_settings,
-        supports_auto_model,
+        provider_settings,
     });
 
     let bind_addr = format!("{}:{}", config.server.host, config.server.port);
@@ -179,20 +206,46 @@ mod tests {
 
         let rate_limiter = RateLimiter::new();
         rate_limiter.register("claude".into(), "sonnet".into(), settings.clone());
+        rate_limiter.register("claude".into(), "_auto".into(), settings.clone());
+        rate_limiter.register("gemini".into(), "_auto".into(), settings.clone());
 
         let mut model_settings = HashMap::new();
         model_settings.insert(("claude".into(), "sonnet".into()), settings);
 
-        let mut supports_auto_model = HashMap::new();
-        supports_auto_model.insert("claude".into(), true);
-        supports_auto_model.insert("gemini".into(), true);
-        supports_auto_model.insert("codex".into(), false);
+        let mut provider_settings = HashMap::new();
+        provider_settings.insert(
+            "claude".into(),
+            ProviderSettings {
+                supports_auto_model: true,
+                rps: Some(10),
+                rpm: Some(100),
+                concurrent: Some(2),
+                timeout_secs: Some(60),
+            },
+        );
+        provider_settings.insert(
+            "gemini".into(),
+            ProviderSettings {
+                supports_auto_model: true,
+                rps: Some(10),
+                rpm: Some(100),
+                concurrent: Some(2),
+                timeout_secs: Some(60),
+            },
+        );
+        provider_settings.insert(
+            "codex".into(),
+            ProviderSettings {
+                supports_auto_model: false,
+                ..Default::default()
+            },
+        );
 
         Arc::new(AppState {
             executor,
             rate_limiter,
             model_settings,
-            supports_auto_model,
+            provider_settings,
         })
     }
 

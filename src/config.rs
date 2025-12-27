@@ -33,6 +33,14 @@ pub struct ProviderConfig {
     #[serde(default = "default_true")]
     pub supports_auto_model: bool,
     #[serde(default)]
+    pub rps: Option<u32>,
+    #[serde(default)]
+    pub rpm: Option<u32>,
+    #[serde(default)]
+    pub concurrent: Option<u32>,
+    #[serde(default)]
+    pub timeout_secs: Option<u64>,
+    #[serde(default)]
     pub models: Vec<ModelConfig>,
 }
 
@@ -88,12 +96,32 @@ impl Config {
         map
     }
 
-    pub fn provider_supports_auto_model(&self) -> HashMap<String, bool> {
+    pub fn provider_settings(&self) -> HashMap<String, ProviderSettings> {
         self.providers
             .iter()
-            .map(|p| (p.name.clone(), p.supports_auto_model))
+            .map(|p| {
+                (
+                    p.name.clone(),
+                    ProviderSettings {
+                        supports_auto_model: p.supports_auto_model,
+                        rps: p.rps,
+                        rpm: p.rpm,
+                        concurrent: p.concurrent,
+                        timeout_secs: p.timeout_secs,
+                    },
+                )
+            })
             .collect()
     }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ProviderSettings {
+    pub supports_auto_model: bool,
+    pub rps: Option<u32>,
+    pub rpm: Option<u32>,
+    pub concurrent: Option<u32>,
+    pub timeout_secs: Option<u64>,
 }
 
 impl Default for ServerConfig {

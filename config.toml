@@ -5,6 +5,11 @@ port = 3000
 # Codex provider
 [[providers]]
 name = "codex"
+supports_auto_model = true
+rps = 1
+rpm = 30
+concurrent = 1
+timeout_secs = 120
 
 [[providers.models]]
 name = "gpt-5.2-codex"
@@ -30,6 +35,11 @@ timeout_secs = 60
 # Claude provider
 [[providers]]
 name = "claude"
+supports_auto_model = true
+rps = 1
+rpm = 50
+concurrent = 1
+timeout_secs = 120
 
 [[providers.models]]
 name = "sonnet"
@@ -55,6 +65,11 @@ timeout_secs = 180
 # Gemini provider
 [[providers]]
 name = "gemini"
+supports_auto_model = true
+rps = 2
+rpm = 100
+concurrent = 1
+timeout_secs = 60
 
 [[providers.models]]
 name = "gemini-2.5-flash"
