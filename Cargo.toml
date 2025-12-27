@@ -1,0 +1,17 @@
+[package]
+name = "llm-mux"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+actix-web = "4.12.1"
+tokio = { version = "1.48.0", features = ["full", "process"] }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.147"
+toml = "0.9.10+spec-1.1.0"
+tempfile = "3.24.0"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
+thiserror = "2.0.17"
+async-trait = "0.1.89"
+dashmap = "6.1.0"
