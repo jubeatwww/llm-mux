@@ -1,6 +1,6 @@
 use actix_web::{HttpResponse, ResponseError};
 use serde::Serialize;
-use std::fmt;
+use thiserror::Error;
 
 #[derive(Debug, Serialize)]
 pub struct ErrorResponse {
@@ -9,37 +9,40 @@ pub struct ErrorResponse {
     pub stderr: Option<String>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum AppError {
+    #[error("provider execution failed: {message}")]
     ProviderExecution { message: String, stderr: String },
-    ProviderNotFound(String),
-    ModelNotFound { provider: String, model: String },
-    RateLimited { provider: String, model: String },
-    Timeout { provider: String, timeout_secs: u64 },
-    InvalidSchema(String),
-    ConfigLoad(String),
-    OutputParse { message: String, stdout: String },
-}
 
-impl fmt::Display for AppError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::ProviderExecution { message, .. } => {
-                write!(f, "provider execution failed: {message}")
-            }
-            Self::ProviderNotFound(p) => write!(f, "provider not found: {p}"),
-            Self::ModelNotFound { provider, model } => {
-                write!(f, "model '{model}' not found for provider '{provider}'")
-            }
-            Self::RateLimited { provider, model } => write!(f, "rate limited: {provider}/{model}"),
-            Self::Timeout { provider, timeout_secs } => {
-                write!(f, "{provider} timed out after {timeout_secs}s")
-            }
-            Self::InvalidSchema(e) => write!(f, "invalid schema: {e}"),
-            Self::ConfigLoad(e) => write!(f, "config load error: {e}"),
-            Self::OutputParse { message, .. } => write!(f, "output parse error: {message}"),
-        }
-    }
+    #[error("provider not found: {0}")]
+    ProviderNotFound(String),
+
+    #[error("model '{model:?}' not found for provider '{provider}'")]
+    ModelNotFound {
+        provider: String,
+        model: Option<String>,
+    },
+
+    #[error("rate limited: {provider}/{model:?}")]
+    RateLimited {
+        provider: String,
+        model: Option<String>,
+    },
+
+    #[error("provider '{0}' does not support auto model selection")]
+    AutoModelNotSupported(String),
+
+    #[error("{provider} timed out after {timeout_secs}s")]
+    Timeout { provider: String, timeout_secs: u64 },
+
+    #[error("invalid schema: {0}")]
+    InvalidSchema(String),
+
+    #[error("config load error: {0}")]
+    ConfigLoad(String),
+
+    #[error("output parse error: {message}")]
+    OutputParse { message: String, stdout: String },
 }
 
 impl ResponseError for AppError {
@@ -52,7 +55,9 @@ impl ResponseError for AppError {
                     stderr: Some(stderr.clone()),
                 },
             ),
-            Self::ProviderNotFound(_) | Self::ModelNotFound { .. } => (
+            Self::ProviderNotFound(_)
+            | Self::ModelNotFound { .. }
+            | Self::AutoModelNotSupported(_) => (
                 actix_web::http::StatusCode::BAD_REQUEST,
                 ErrorResponse {
                     error: self.to_string(),

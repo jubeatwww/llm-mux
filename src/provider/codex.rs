@@ -1,21 +1,19 @@
+use std::sync::Arc;
+
 use async_trait::async_trait;
 use serde_json::Value;
 
 use crate::error::AppError;
-use crate::provider::executor::{run_cli, run_cli_with_timeout};
+use crate::provider::executor::Executor;
 use crate::provider::Provider;
 
-pub struct CodexProvider;
-
-impl CodexProvider {
-    pub fn new() -> Self {
-        Self
-    }
+pub struct CodexProvider {
+    executor: Arc<dyn Executor>,
 }
 
-impl Default for CodexProvider {
-    fn default() -> Self {
-        Self::new()
+impl CodexProvider {
+    pub fn new(executor: Arc<dyn Executor>) -> Self {
+        Self { executor }
     }
 }
 
@@ -29,7 +27,7 @@ impl Provider for CodexProvider {
         &self,
         prompt: &str,
         schema: &Value,
-        model: &str,
+        model: Option<&str>,
         timeout_secs: Option<u64>,
     ) -> Result<Value, AppError> {
         let schema_file = tempfile::Builder::new()
@@ -47,20 +45,21 @@ impl Provider for CodexProvider {
             },
         )?;
 
-        let schema_path = schema_file.path().to_string_lossy();
-        let args = [
-            "exec",
-            "--model",
-            model,
-            "--output-schema",
-            &schema_path,
-            "--skip-git-repo-check",
-        ];
+        let schema_path = schema_file.path().to_string_lossy().to_string();
+        let mut args: Vec<String> = vec!["exec".into()];
+        if let Some(m) = model {
+            args.extend(["--model".into(), m.into()]);
+        }
+        args.extend([
+            "--output-schema".into(),
+            schema_path,
+            "--skip-git-repo-check".into(),
+        ]);
 
-        let output = match timeout_secs {
-            Some(t) => run_cli_with_timeout("codex", &args, prompt, t).await?,
-            None => run_cli("codex", &args, prompt).await?,
-        };
+        let output = self
+            .executor
+            .run("codex", &args, prompt, timeout_secs)
+            .await?;
 
         serde_json::from_str(&output.stdout).map_err(|e| AppError::OutputParse {
             message: format!("failed to parse output: {e}"),

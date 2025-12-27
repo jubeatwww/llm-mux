@@ -14,13 +14,13 @@ use tracing_subscriber::EnvFilter;
 
 use crate::config::{Config, ModelSettings};
 use crate::error::AppError;
-use crate::provider::get_provider;
+use crate::provider::{get_provider_with_executor, CliExecutor, Executor};
 use crate::rate_limiter::RateLimiter;
 
 #[derive(Debug, Deserialize)]
 struct GenerateRequest {
     provider: String,
-    model: String,
+    model: Option<String>,
     prompt: String,
     schema: Value,
 }
@@ -31,8 +31,10 @@ struct GenerateResponse {
 }
 
 struct AppState {
+    executor: Arc<dyn Executor>,
     rate_limiter: RateLimiter,
     model_settings: HashMap<(String, String), ModelSettings>,
+    supports_auto_model: HashMap<String, bool>,
 }
 
 async fn health() -> HttpResponse {
@@ -43,31 +45,54 @@ async fn generate(
     state: web::Data<Arc<AppState>>,
     req: web::Json<GenerateRequest>,
 ) -> Result<HttpResponse, AppError> {
-    let provider = get_provider(&req.provider)
+    let provider = get_provider_with_executor(&req.provider, state.executor.clone())
         .ok_or_else(|| AppError::ProviderNotFound(req.provider.clone()))?;
 
-    let _guard = state
-        .rate_limiter
-        .try_acquire(&req.provider, &req.model)
-        .map_err(|()| AppError::RateLimited {
-            provider: req.provider.clone(),
-            model: req.model.clone(),
-        })?;
+    let (timeout_secs, _guard) = match &req.model {
+        Some(model) => {
+            let key = (req.provider.clone(), model.clone());
+            if !state.model_settings.contains_key(&key) {
+                return Err(AppError::ModelNotFound {
+                    provider: req.provider.clone(),
+                    model: req.model.clone(),
+                });
+            }
 
-    let timeout_secs = state
-        .model_settings
-        .get(&(req.provider.clone(), req.model.clone()))
-        .and_then(|s| s.timeout_secs);
+            let guard = state
+                .rate_limiter
+                .try_acquire(&req.provider, model)
+                .map_err(|()| AppError::RateLimited {
+                    provider: req.provider.clone(),
+                    model: req.model.clone(),
+                })?;
+
+            let timeout = state.model_settings.get(&key).and_then(|s| s.timeout_secs);
+            (timeout, Some(guard))
+        }
+        None => {
+            let supports_auto = state
+                .supports_auto_model
+                .get(&req.provider)
+                .copied()
+                .unwrap_or(true);
+
+            if !supports_auto {
+                return Err(AppError::AutoModelNotSupported(req.provider.clone()));
+            }
+
+            (None, None)
+        }
+    };
 
     info!(
         provider = %req.provider,
-        model = %req.model,
+        model = ?req.model,
         timeout_secs = ?timeout_secs,
         "executing request"
     );
 
     let output = provider
-        .execute(&req.prompt, &req.schema, &req.model, timeout_secs)
+        .execute(&req.prompt, &req.schema, req.model.as_deref(), timeout_secs)
         .await?;
 
     Ok(HttpResponse::Ok().json(GenerateResponse { output }))
@@ -98,6 +123,7 @@ async fn main() -> std::io::Result<()> {
     };
 
     let model_settings = config.model_settings();
+    let supports_auto_model = config.provider_supports_auto_model();
 
     let rate_limiter = RateLimiter::new();
     for (key, settings) in &model_settings {
@@ -106,8 +132,10 @@ async fn main() -> std::io::Result<()> {
     }
 
     let state = Arc::new(AppState {
+        executor: CliExecutor::new(),
         rate_limiter,
         model_settings,
+        supports_auto_model,
     });
 
     let bind_addr = format!("{}:{}", config.server.host, config.server.port);
@@ -122,4 +150,135 @@ async fn main() -> std::io::Result<()> {
     .bind(&bind_addr)?
     .run()
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::provider::executor::{CommandOutput, MockExecutor};
+    use actix_web::{dev::ServiceResponse, test};
+
+    fn mock_executor() -> Arc<dyn Executor> {
+        let mut mock = MockExecutor::new();
+        mock.expect_run().returning(|_, _, _, _| {
+            Ok(CommandOutput {
+                stdout: r#"{"structured_output": {"message": "hello"}}"#.to_string(),
+                stderr: String::new(),
+            })
+        });
+        Arc::new(mock)
+    }
+
+    fn test_state(executor: Arc<dyn Executor>) -> Arc<AppState> {
+        let settings = ModelSettings {
+            rps: Some(10),
+            rpm: Some(100),
+            concurrent: Some(2),
+            timeout_secs: Some(60),
+        };
+
+        let rate_limiter = RateLimiter::new();
+        rate_limiter.register("claude".into(), "sonnet".into(), settings.clone());
+
+        let mut model_settings = HashMap::new();
+        model_settings.insert(("claude".into(), "sonnet".into()), settings);
+
+        let mut supports_auto_model = HashMap::new();
+        supports_auto_model.insert("claude".into(), true);
+        supports_auto_model.insert("gemini".into(), true);
+        supports_auto_model.insert("codex".into(), false);
+
+        Arc::new(AppState {
+            executor,
+            rate_limiter,
+            model_settings,
+            supports_auto_model,
+        })
+    }
+
+    async fn post_generate(body: Value) -> ServiceResponse {
+        let state = test_state(mock_executor());
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .route("/generate", web::post().to(generate)),
+        )
+        .await;
+
+        let req = test::TestRequest::post()
+            .uri("/generate")
+            .set_json(body)
+            .to_request();
+
+        test::call_service(&app, req).await
+    }
+
+    #[actix_web::test]
+    async fn test_provider_not_found() {
+        let resp = post_generate(serde_json::json!({
+            "provider": "unknown",
+            "model": "test",
+            "prompt": "hello",
+            "schema": {}
+        }))
+        .await;
+        assert_eq!(resp.status(), 400);
+    }
+
+    #[actix_web::test]
+    async fn test_model_not_found() {
+        let resp = post_generate(serde_json::json!({
+            "provider": "claude",
+            "model": "unknown-model",
+            "prompt": "hello",
+            "schema": {}
+        }))
+        .await;
+        assert_eq!(resp.status(), 400);
+    }
+
+    #[actix_web::test]
+    async fn test_auto_model_not_supported() {
+        let resp = post_generate(serde_json::json!({
+            "provider": "codex",
+            "prompt": "hello",
+            "schema": {}
+        }))
+        .await;
+        assert_eq!(resp.status(), 400);
+    }
+
+    #[actix_web::test]
+    async fn test_auto_model_supported() {
+        let resp = post_generate(serde_json::json!({
+            "provider": "claude",
+            "prompt": "hello",
+            "schema": {}
+        }))
+        .await;
+        assert_eq!(resp.status(), 200);
+    }
+
+    #[actix_web::test]
+    async fn test_valid_request_with_model() {
+        let resp = post_generate(serde_json::json!({
+            "provider": "claude",
+            "model": "sonnet",
+            "prompt": "hello",
+            "schema": {}
+        }))
+        .await;
+        assert_eq!(resp.status(), 200);
+    }
+
+    #[actix_web::test]
+    async fn test_missing_required_field() {
+        let resp = post_generate(serde_json::json!({
+            "provider": "claude",
+            "model": "sonnet",
+            "schema": {}
+        }))
+        .await;
+        assert_eq!(resp.status(), 400);
+    }
 }

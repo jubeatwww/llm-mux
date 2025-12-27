@@ -1,21 +1,19 @@
+use std::sync::Arc;
+
 use async_trait::async_trait;
 use serde_json::Value;
 
 use crate::error::AppError;
-use crate::provider::executor::{run_cli, run_cli_with_timeout};
+use crate::provider::executor::Executor;
 use crate::provider::Provider;
 
-pub struct ClaudeProvider;
-
-impl ClaudeProvider {
-    pub fn new() -> Self {
-        Self
-    }
+pub struct ClaudeProvider {
+    executor: Arc<dyn Executor>,
 }
 
-impl Default for ClaudeProvider {
-    fn default() -> Self {
-        Self::new()
+impl ClaudeProvider {
+    pub fn new(executor: Arc<dyn Executor>) -> Self {
+        Self { executor }
     }
 }
 
@@ -29,26 +27,28 @@ impl Provider for ClaudeProvider {
         &self,
         prompt: &str,
         schema: &Value,
-        model: &str,
+        model: Option<&str>,
         timeout_secs: Option<u64>,
     ) -> Result<Value, AppError> {
         let schema_compact =
             serde_json::to_string(schema).map_err(|e| AppError::InvalidSchema(format!("{e}")))?;
 
-        let args = [
-            "--model",
-            model,
-            "--output-format",
-            "json",
-            "--json-schema",
-            &schema_compact,
-            "-p",
-        ];
+        let mut args: Vec<String> = Vec::new();
+        if let Some(m) = model {
+            args.extend(["--model".into(), m.into()]);
+        }
+        args.extend([
+            "--output-format".into(),
+            "json".into(),
+            "--json-schema".into(),
+            schema_compact,
+            "-p".into(),
+        ]);
 
-        let output = match timeout_secs {
-            Some(t) => run_cli_with_timeout("claude", &args, prompt, t).await?,
-            None => run_cli("claude", &args, prompt).await?,
-        };
+        let output = self
+            .executor
+            .run("claude", &args, prompt, timeout_secs)
+            .await?;
 
         let response: Value =
             serde_json::from_str(&output.stdout).map_err(|e| AppError::OutputParse {

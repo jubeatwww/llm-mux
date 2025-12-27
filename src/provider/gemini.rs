@@ -1,21 +1,19 @@
+use std::sync::Arc;
+
 use async_trait::async_trait;
 use serde_json::Value;
 
 use crate::error::AppError;
-use crate::provider::executor::{run_cli, run_cli_with_timeout};
+use crate::provider::executor::Executor;
 use crate::provider::Provider;
 
-pub struct GeminiProvider;
-
-impl GeminiProvider {
-    pub fn new() -> Self {
-        Self
-    }
+pub struct GeminiProvider {
+    executor: Arc<dyn Executor>,
 }
 
-impl Default for GeminiProvider {
-    fn default() -> Self {
-        Self::new()
+impl GeminiProvider {
+    pub fn new(executor: Arc<dyn Executor>) -> Self {
+        Self { executor }
     }
 }
 
@@ -29,7 +27,7 @@ impl Provider for GeminiProvider {
         &self,
         prompt: &str,
         schema: &Value,
-        model: &str,
+        model: Option<&str>,
         timeout_secs: Option<u64>,
     ) -> Result<Value, AppError> {
         let schema_str = serde_json::to_string_pretty(schema)
@@ -39,11 +37,15 @@ impl Provider for GeminiProvider {
             "{prompt}\n\n---\nRespond with JSON matching this schema:\n```json\n{schema_str}\n```"
         );
 
-        let args = ["--model", model];
-        let output = match timeout_secs {
-            Some(t) => run_cli_with_timeout("gemini", &args, &combined_prompt, t).await?,
-            None => run_cli("gemini", &args, &combined_prompt).await?,
-        };
+        let mut args: Vec<String> = Vec::new();
+        if let Some(m) = model {
+            args.extend(["--model".into(), m.into()]);
+        }
+
+        let output = self
+            .executor
+            .run("gemini", &args, &combined_prompt, timeout_secs)
+            .await?;
 
         let json_str = extract_json(&output.stdout).unwrap_or(&output.stdout);
 

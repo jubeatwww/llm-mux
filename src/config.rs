@@ -30,8 +30,14 @@ fn default_port() -> u16 {
 #[derive(Debug, Clone, Deserialize)]
 pub struct ProviderConfig {
     pub name: String,
+    #[serde(default = "default_true")]
+    pub supports_auto_model: bool,
     #[serde(default)]
     pub models: Vec<ModelConfig>,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -80,6 +86,13 @@ impl Config {
             }
         }
         map
+    }
+
+    pub fn provider_supports_auto_model(&self) -> HashMap<String, bool> {
+        self.providers
+            .iter()
+            .map(|p| (p.name.clone(), p.supports_auto_model))
+            .collect()
     }
 }
 
