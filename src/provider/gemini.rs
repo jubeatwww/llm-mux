@@ -34,7 +34,7 @@ impl Provider for GeminiProvider {
             .map_err(|e| AppError::InvalidSchema(format!("{e}")))?;
 
         let combined_prompt = format!(
-            "{prompt}\n\n---\nRespond with JSON matching this schema:\n```json\n{schema_str}\n```"
+            "{prompt}\n\n---\nRespond with ONLY valid JSON matching this schema. No explanations, no markdown code blocks:\n{schema_str}"
         );
 
         let mut args: Vec<String> = Vec::new();
