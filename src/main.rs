@@ -2,6 +2,7 @@ mod config;
 mod error;
 mod provider;
 mod rate_limiter;
+mod schema;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -45,6 +46,8 @@ async fn generate(
     state: web::Data<Arc<AppState>>,
     req: web::Json<GenerateRequest>,
 ) -> Result<HttpResponse, AppError> {
+    schema::validate_structured_schema(&req.schema)?;
+
     let provider = get_provider_with_executor(&req.provider, state.executor.clone())
         .ok_or_else(|| AppError::ProviderNotFound(req.provider.clone()))?;
 
@@ -107,6 +110,8 @@ async fn generate(
     let output = provider
         .execute(&req.prompt, &req.schema, req.model.as_deref(), timeout_secs)
         .await?;
+
+    schema::validate_output(&req.schema, &output)?;
 
     Ok(HttpResponse::Ok().json(GenerateResponse { output }))
 }
@@ -196,6 +201,15 @@ mod tests {
         Arc::new(mock)
     }
 
+    fn valid_schema() -> Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "message": { "type": "string" }
+            }
+        })
+    }
+
     fn test_state(executor: Arc<dyn Executor>) -> Arc<AppState> {
         let settings = ModelSettings {
             rps: Some(10),
@@ -272,7 +286,7 @@ mod tests {
             "provider": "unknown",
             "model": "test",
             "prompt": "hello",
-            "schema": {}
+            "schema": valid_schema()
         }))
         .await;
         assert_eq!(resp.status(), 400);
@@ -284,7 +298,7 @@ mod tests {
             "provider": "claude",
             "model": "unknown-model",
             "prompt": "hello",
-            "schema": {}
+            "schema": valid_schema()
         }))
         .await;
         assert_eq!(resp.status(), 400);
@@ -295,7 +309,7 @@ mod tests {
         let resp = post_generate(serde_json::json!({
             "provider": "codex",
             "prompt": "hello",
-            "schema": {}
+            "schema": valid_schema()
         }))
         .await;
         assert_eq!(resp.status(), 400);
@@ -306,7 +320,7 @@ mod tests {
         let resp = post_generate(serde_json::json!({
             "provider": "claude",
             "prompt": "hello",
-            "schema": {}
+            "schema": valid_schema()
         }))
         .await;
         assert_eq!(resp.status(), 200);
@@ -318,7 +332,7 @@ mod tests {
             "provider": "claude",
             "model": "sonnet",
             "prompt": "hello",
-            "schema": {}
+            "schema": valid_schema()
         }))
         .await;
         assert_eq!(resp.status(), 200);
@@ -329,7 +343,49 @@ mod tests {
         let resp = post_generate(serde_json::json!({
             "provider": "claude",
             "model": "sonnet",
-            "schema": {}
+            "schema": valid_schema()
+        }))
+        .await;
+        assert_eq!(resp.status(), 400);
+    }
+
+    #[actix_web::test]
+    async fn test_invalid_schema_missing_type() {
+        let resp = post_generate(serde_json::json!({
+            "provider": "claude",
+            "prompt": "hello",
+            "schema": {
+                "properties": {
+                    "message": { "type": "string" }
+                }
+            }
+        }))
+        .await;
+        assert_eq!(resp.status(), 400);
+    }
+
+    #[actix_web::test]
+    async fn test_invalid_schema_wrong_type() {
+        let resp = post_generate(serde_json::json!({
+            "provider": "claude",
+            "prompt": "hello",
+            "schema": {
+                "type": "array",
+                "items": { "type": "string" }
+            }
+        }))
+        .await;
+        assert_eq!(resp.status(), 400);
+    }
+
+    #[actix_web::test]
+    async fn test_invalid_schema_missing_properties() {
+        let resp = post_generate(serde_json::json!({
+            "provider": "claude",
+            "prompt": "hello",
+            "schema": {
+                "type": "object"
+            }
         }))
         .await;
         assert_eq!(resp.status(), 400);

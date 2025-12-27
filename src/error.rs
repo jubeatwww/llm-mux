@@ -43,6 +43,12 @@ pub enum AppError {
 
     #[error("output parse error: {message}")]
     OutputParse { message: String, stdout: String },
+
+    #[error("output validation failed: {errors:?}")]
+    OutputValidation {
+        errors: Vec<String>,
+        output: serde_json::Value,
+    },
 }
 
 impl ResponseError for AppError {
@@ -97,6 +103,13 @@ impl ResponseError for AppError {
                 ErrorResponse {
                     error: message.clone(),
                     stderr: Some(stdout.clone()),
+                },
+            ),
+            Self::OutputValidation { errors, output } => (
+                actix_web::http::StatusCode::UNPROCESSABLE_ENTITY,
+                ErrorResponse {
+                    error: format!("output validation failed: {}", errors.join("; ")),
+                    stderr: Some(output.to_string()),
                 },
             ),
         };

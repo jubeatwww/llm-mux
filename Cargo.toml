@@ -15,6 +15,7 @@ tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
 thiserror = "2.0.17"
 async-trait = "0.1.89"
 dashmap = "6.1.0"
+jsonschema = "0.38.1"
 
 [dev-dependencies]
-mockall = "0.13"
+mockall = "0.14.0"
