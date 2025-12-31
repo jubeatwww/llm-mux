@@ -1,0 +1,93 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: llm-mux-config
+  namespace: llm-mux
+data:
+  config.toml: |
+    [server]
+    host = "0.0.0.0"
+    port = 3000
+
+    # Codex provider
+    [[providers]]
+    name = "codex"
+    supports_auto_model = true
+    rps = 1
+    rpm = 30
+    concurrent = 1
+    timeout_secs = 120
+
+    [[providers.models]]
+    name = "gpt-5.2-codex"
+    rps = 1
+    rpm = 30
+    concurrent = 1
+    timeout_secs = 120
+
+    [[providers.models]]
+    name = "gpt-5.1-codex-max"
+    rps = 1
+    rpm = 30
+    concurrent = 1
+    timeout_secs = 180
+
+    [[providers.models]]
+    name = "gpt-5.1-codex-mini"
+    rps = 1
+    rpm = 60
+    concurrent = 1
+    timeout_secs = 60
+
+    # Claude provider
+    [[providers]]
+    name = "claude"
+    supports_auto_model = true
+    rps = 1
+    rpm = 50
+    concurrent = 1
+    timeout_secs = 120
+
+    [[providers.models]]
+    name = "sonnet"
+    rps = 1
+    rpm = 50
+    concurrent = 1
+    timeout_secs = 120
+
+    [[providers.models]]
+    name = "haiku"
+    rps = 1
+    rpm = 60
+    concurrent = 1
+    timeout_secs = 60
+
+    [[providers.models]]
+    name = "opus"
+    rps = 1
+    rpm = 20
+    concurrent = 1
+    timeout_secs = 180
+
+    # Gemini provider
+    [[providers]]
+    name = "gemini"
+    supports_auto_model = true
+    rps = 2
+    rpm = 100
+    concurrent = 1
+    timeout_secs = 60
+
+    [[providers.models]]
+    name = "gemini-2.5-flash"
+    rps = 2
+    rpm = 100
+    concurrent = 1
+    timeout_secs = 60
+
+    [[providers.models]]
+    name = "gemini-2.5-pro"
+    rps = 1
+    rpm = 60
+    concurrent = 1
+    timeout_secs = 120

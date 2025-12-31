@@ -1,0 +1,48 @@
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: strip-llm-prefix
+  namespace: llm-mux
+spec:
+  stripPrefix:
+    prefixes:
+      - /llm
+
+---
+
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: internal-ip-allowlist
+  namespace: llm-mux
+spec:
+  ipWhiteList:
+    sourceRange:
+      - "192.168.1.0/24"
+      - "127.0.0.1/32"
+      - "10.42.0.0/16"
+
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: llm-mux-ingress
+  namespace: llm-mux
+  annotations:
+    traefik.ingress.kubernetes.io/router.middlewares: llm-mux-strip-llm-prefix@kubernetescrd, llm-mux-internal-ip-allowlist@kubernetescrd
+spec:
+  tls:
+    - hosts:
+        - api.shar0.dev
+      secretName: api-tls
+  rules:
+    - host: api.shar0.dev
+      http:
+        paths:
+          - path: /llm
+            pathType: Prefix
+            backend:
+              service:
+                name: llm-mux
+                port:
+                  number: 300

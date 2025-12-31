@@ -1,0 +1,39 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: llm-mux
+  namespace: llm-mux
+  labels:
+    app: llm-mux
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: llm-mux
+  template:
+    metadata:
+      labels:
+        app: llm-mux
+    spec:
+      containers:
+        - name: llm-mux
+          image: ghcr.io/jubeatwww/llm-mux:latest
+          ports:
+            - containerPort: 3000
+          env:
+            - name: RUST_LOG
+              value: llm_mux=info
+          volumeMounts:
+            - name: docker-root
+              mountPath: /root
+            - name: config
+              mountPath: /app/config.toml
+              subPath: config.toml
+              readOnly: true
+      volumes:
+        - name: docker-root
+          persistentVolumeClaim:
+            claimName: llm-mux-docker-root
+        - name: config
+          configMap:
+            name: llm-mux-config

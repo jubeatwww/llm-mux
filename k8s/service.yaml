@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: llm-mux
+  namespace: llm-mux
+spec:
+  selector:
+    app: llm-mux
+  ports:
+    - name: http
+      protocol: TCP
+      port: 3000
+      targetPort: 3000
